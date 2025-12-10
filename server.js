@@ -1,10 +1,13 @@
 import express from "express";
-import fetch from "node-fetch"; // will be installed via npm
+import fetch from "node-fetch";
 
 const app = express();
 app.use(express.json());
 
-const SERP_API_KEY = process.env.SERPAPI_KEY; // set via env var on Render
+// SerpAPI key comes from Render environment variable
+const SERP_API_KEY = process.env.SERPAPI_KEY;
+
+// -------------------- Helpers --------------------
 
 function buildQuery(requirements, country, certifications) {
   let base = (requirements || "").trim();
@@ -34,7 +37,7 @@ function mapResultToSupplier(item, country, requirements) {
   const lowerSnippet = snippet.toLowerCase();
   const lowerReq = (requirements || "").toLowerCase();
 
-  // ---------- Tags (same idea as before) ----------
+  // ---------- Tags (topic classification) ----------
   const tags = [];
   if (lowerSnippet.includes("iso")) tags.push("ISO / quality");
   if (lowerSnippet.includes("medical") || lowerSnippet.includes("pharma"))
@@ -46,14 +49,14 @@ function mapResultToSupplier(item, country, requirements) {
     tags.push("Prototyping");
   tags.push("Web result");
 
-  // ---------- Approximate generic specs ----------
+  // ---------- Generic specs (best-effort) ----------
 
-  // company size & employees (very rough guess based on keywords)
+  // Company size & employees – very heuristic
   let sizeCategory = "Unknown";
   let employees = "Unknown (check company website / LinkedIn)";
 
   if (lowerSnippet.includes("employees")) {
-    employees = "Employees mentioned in snippet – confirm on website";
+    employees = "Employees mentioned in snippet – confirm on company pages.";
   }
   if (
     lowerSnippet.includes("small company") ||
@@ -69,11 +72,11 @@ function mapResultToSupplier(item, country, requirements) {
     lowerSnippet.includes("thousands of employees")
   ) {
     sizeCategory = "Large / multinational (heuristic from snippet)";
-  } else if (sizeCategory === "Unknown") {
+  } else {
     sizeCategory = "Not stated – likely small/medium (verify manually)";
   }
 
-  // turnover note
+  // Turnover note
   let turnover = "Not stated – check company financials / About page.";
   if (
     lowerSnippet.includes("million") ||
@@ -81,10 +84,11 @@ function mapResultToSupplier(item, country, requirements) {
     lowerSnippet.includes("turnover") ||
     lowerSnippet.includes("revenue")
   ) {
-    turnover = "Turnover / revenue mentioned in snippet – check original page for figures.";
+    turnover =
+      "Turnover / revenue appears in snippet – open source page for figures.";
   }
 
-  // location note – best effort from snippet or title
+  // Location note
   let location = country || "Not specified";
   let locationDetail = "Location not clearly stated in search snippet.";
 
@@ -103,17 +107,18 @@ function mapResultToSupplier(item, country, requirements) {
     }
   }
 
-  // ---------- Match info for the specific request ----------
+  // ---------- Request-specific match info ----------
 
-  // Take some longer keywords from the requirement text (4+ chars)
   const requirementKeywords = (requirements || "")
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter((w) => w.length >= 4);
 
-  const uniqueKeywords = [...new Set(requirementKeywords)].slice(0, 8); // max 8
+  const uniqueKeywords = [...new Set(requirementKeywords)].slice(0, 8);
+  const matchedKeywords = uniqueKeywords.filter((k) =>
+    lowerSnippet.includes(k)
+  );
 
-  const matchedKeywords = uniqueKeywords.filter((k) => lowerSnippet.includes(k));
   const matchScore =
     uniqueKeywords.length > 0
       ? Math.round((matchedKeywords.length / uniqueKeywords.length) * 100)
@@ -139,19 +144,20 @@ function mapResultToSupplier(item, country, requirements) {
     description: snippet,
     tags,
 
-    // new generic spec fields
+    // generic specs
     sizeCategory,
     employees,
     turnover,
     location,
     locationDetail,
 
-    // new request-specific fields
+    // request-specific match info
     matchScore,
     matchSummary
   };
 }
 
+// -------------------- API route --------------------
 
 app.post("/api/search-suppliers", async (req, res) => {
   try {
@@ -160,14 +166,16 @@ app.post("/api/search-suppliers", async (req, res) => {
     const num = maxResults && maxResults > 0 ? Math.min(maxResults, 20) : 10;
 
     if (!SERP_API_KEY) {
-      return res.status(500).json({ error: "SerpAPI key not configured on server." });
+      return res
+        .status(500)
+        .json({ error: "SerpAPI key not configured on server." });
     }
 
     const params = new URLSearchParams({
       engine: "google",
       q: query,
       api_key: SERP_API_KEY,
-      num: String(num),
+      num: String(num)
     });
 
     const url = `https://serpapi.com/search.json?${params.toString()}`;
@@ -175,7 +183,9 @@ app.post("/api/search-suppliers", async (req, res) => {
 
     if (!response.ok) {
       console.error("SerpAPI HTTP error:", response.status);
-      return res.status(502).json({ error: `SerpAPI HTTP error ${response.status}` });
+      return res
+        .status(502)
+        .json({ error: `SerpAPI HTTP error ${response.status}` });
     }
 
     const data = await response.json();
@@ -192,7 +202,8 @@ app.post("/api/search-suppliers", async (req, res) => {
   }
 });
 
-// serve static frontend
+// -------------------- Static frontend --------------------
+
 import path from "path";
 import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
