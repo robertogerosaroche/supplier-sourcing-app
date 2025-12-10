@@ -1,106 +1,218 @@
-import express from "express";
-import fetch from "node-fetch"; // will be installed via npm
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Supplier Sourcing Web Scraper</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    /* keep your previous styling if you prefer; this is only a minimal version */
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f172a;
+      color: #e5e7eb;
+    }
+    .app {
+      max-width: 1100px;
+      margin: 24px auto;
+      padding: 24px;
+      background: #020617;
+      border-radius: 16px;
+      border: 1px solid #1f2937;
+    }
+    h1 { margin-top: 0; }
+    textarea, select, input {
+      width: 100%;
+      box-sizing: border-box;
+      border-radius: 8px;
+      border: 1px solid #4b5563;
+      background: #020617;
+      color: #e5e7eb;
+      padding: 8px 10px;
+      margin-top: 4px;
+    }
+    textarea { min-height: 100px; }
+    label { font-size: 0.9rem; margin-top: 8px; display: block; }
+    button {
+      margin-top: 12px;
+      padding: 8px 16px;
+      border-radius: 999px;
+      border: none;
+      background: #2563eb;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: 1.1fr 1.2fr;
+    }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .card {
+      padding: 16px;
+      border-radius: 12px;
+      border: 1px solid #1f2937;
+      background: #020617;
+    }
+    .results { max-height: 500px; overflow-y: auto; margin-top: 8px; }
+    .result-item {
+      border: 1px solid #374151;
+      border-radius: 10px;
+      padding: 8px 10px;
+      margin-bottom: 8px;
+    }
+    .company-name { font-weight: 600; }
+    .pill-row { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
+    .pill {
+      font-size: 0.75rem;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid #4b5563;
+    }
+    .status { font-size: 0.85rem; margin-top: 4px; }
+    .status.error { color: #fecaca; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <h1>Supplier Sourcing Web Scraper</h1>
+    <p>Describe what you need, choose a country, and the tool will search for potential suppliers.</p>
 
-const app = express();
-app.use(express.json());
+    <div class="grid">
+      <div class="card">
+        <label for="requirements">Industry &amp; specifications (required)</label>
+        <textarea id="requirements"
+          placeholder="e.g. Injection moulding machines producer for small plastic parts, ISO 13485, cleanroom, small batches"
+        ></textarea>
 
-const SERP_API_KEY = process.env.SERPAPI_KEY; // set via env var on Render
+        <label for="country">Target country (optional)</label>
+        <select id="country">
+          <option value="">Any country</option>
+          <option value="Germany">Germany</option>
+          <option value="Switzerland">Switzerland</option>
+          <option value="France">France</option>
+          <option value="Italy">Italy</option>
+          <option value="United Kingdom">United Kingdom</option>
+          <option value="United States">United States</option>
+          <option value="China">China</option>
+          <option value="India">India</option>
+          <option value="Japan">Japan</option>
+          <option value="Brazil">Brazil</option>
+          <option value="Mexico">Mexico</option>
+          <option value="Singapore">Singapore</option>
+        </select>
 
-function buildQuery(requirements, country, certifications) {
-  let base = (requirements || "").trim();
-  if (!base) base = "industrial supplier";
+        <label for="certifications">Required certifications (optional)</label>
+        <input id="certifications" type="text" placeholder="e.g. ISO 13485, ISO 9001, GMP" />
 
-  if (certifications) {
-    base += " " + certifications;
-  }
+        <label for="maxResults">Maximum suppliers</label>
+        <input id="maxResults" type="number" value="10" min="1" max="20" />
 
-  const extraKeywords = ["supplier", "manufacturer", "vendor", "B2B"];
-  let query = `${base} (${extraKeywords.join(" OR ")})`;
-  if (country) query += ` in ${country}`;
+        <button id="searchBtn">Search suppliers</button>
+        <div id="status" class="status">Waiting for your first search.</div>
+      </div>
 
-  return query;
-}
+      <div class="card">
+        <strong id="resultCount">0 suppliers</strong>
+        <div class="results" id="results"></div>
+      </div>
+    </div>
+  </div>
 
-function mapResultToSupplier(item, country, requirements) {
-  const url = item.link || item.url || "";
-  let displayLink = "unknown";
-  try {
-    if (url) displayLink = new URL(url).hostname;
-  } catch (_) {}
+  <script>
+    function renderSuppliers(suppliers) {
+      const resultsEl = document.getElementById("results");
+      const countEl = document.getElementById("resultCount");
 
-  const title = item.title || displayLink;
-  const snippet = item.snippet || item.description || "";
+      resultsEl.innerHTML = "";
 
-  const lowerSnippet = snippet.toLowerCase();
-  const lowerReq = (requirements || "").toLowerCase();
+      if (!suppliers.length) {
+        resultsEl.innerHTML = '<p class="status">No suppliers found. Try broadening your requirements.</p>';
+        countEl.textContent = "0 suppliers";
+        return;
+      }
 
-  const tags = [];
-  if (lowerSnippet.includes("iso")) tags.push("ISO / quality");
-  if (lowerSnippet.includes("medical") || lowerSnippet.includes("pharma")) tags.push("Life sciences");
-  if (lowerSnippet.includes("plastic")) tags.push("Plastics");
-  if (lowerSnippet.includes("contract manufacturing")) tags.push("Contract manufacturing");
-  if (lowerReq.includes("prototype") || lowerReq.includes("prototyping")) tags.push("Prototyping");
-  tags.push("Web result");
+      suppliers.forEach((s) => {
+        const div = document.createElement("div");
+        div.className = "result-item";
 
-  return {
-    name: title,
-    url,
-    displayLink,
-    countryHint: country || "Not specified",
-    description: snippet,
-    tags,
-  };
-}
+        const tagsHtml = (s.tags || [])
+          .map((t) => `<span class="pill">${t}</span>`)
+          .join("");
 
-app.post("/api/search-suppliers", async (req, res) => {
-  try {
-    const { requirements, country, certifications, maxResults } = req.body || {};
-    const query = buildQuery(requirements, country, certifications);
-    const num = maxResults && maxResults > 0 ? Math.min(maxResults, 20) : 10;
+        const website = s.url || "No URL";
+        const websiteLink = s.url || "#";
 
-    if (!SERP_API_KEY) {
-      return res.status(500).json({ error: "SerpAPI key not configured on server." });
+        div.innerHTML = `
+          <div class="company-name">${s.name}</div>
+          <div>${s.displayLink} · <strong>${s.countryHint}</strong></div>
+          <div class="pill-row">${tagsHtml}</div>
+          <div style="margin-top:4px;">${s.description || "No description available."}</div>
+          <div style="margin-top:4px;">Website: <a href="${websiteLink}" target="_blank" rel="noopener noreferrer">${website}</a></div>
+        `;
+
+        resultsEl.appendChild(div);
+      });
+
+      countEl.textContent = `${suppliers.length} supplier${suppliers.length !== 1 ? "s" : ""}`;
     }
 
-    const params = new URLSearchParams({
-      engine: "google",
-      q: query,
-      api_key: SERP_API_KEY,
-      num: String(num),
+    function setStatus(message, isError = false) {
+      const statusEl = document.getElementById("status");
+      statusEl.textContent = message;
+      statusEl.className = "status" + (isError ? " error" : "");
+    }
+
+    async function searchSuppliers(inputs) {
+      const response = await fetch("/api/search-suppliers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(inputs),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Backend error: HTTP ${response.status}`);
+      }
+
+      return response.json();
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      const button = document.getElementById("searchBtn");
+
+      button.addEventListener("click", async () => {
+        const requirements = document.getElementById("requirements").value.trim();
+        const country = (document.getElementById("country").value || "").trim();
+        const certifications = (document.getElementById("certifications").value || "").trim();
+        const maxResultsRaw = (document.getElementById("maxResults").value || "10").trim();
+        const maxResults = parseInt(maxResultsRaw, 10) || 10;
+
+        if (!requirements) {
+          setStatus("Please enter at least a short description or a couple of keywords.", true);
+          return;
+        }
+
+        const payload = { requirements, country, certifications, maxResults };
+
+        button.disabled = true;
+        setStatus("Searching for potential suppliers...", false);
+
+        try {
+          const suppliers = await searchSuppliers(payload);
+          renderSuppliers(suppliers);
+          setStatus("Search completed. Review the candidates and shortlist those that fit best.");
+        } catch (err) {
+          console.error(err);
+          setStatus(`Error: ${err.message}`, true);
+          renderSuppliers([]);
+        } finally {
+          button.disabled = false;
+        }
+      });
     });
-
-    const url = `https://serpapi.com/search.json?${params.toString()}`;
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      console.error("SerpAPI HTTP error:", response.status);
-      return res.status(502).json({ error: `SerpAPI HTTP error ${response.status}` });
-    }
-
-    const data = await response.json();
-    const results = data.organic_results || [];
-    const suppliers = results
-      .filter((r) => r.link)
-      .slice(0, num)
-      .map((item) => mapResultToSupplier(item, country, requirements));
-
-    res.json(suppliers);
-  } catch (err) {
-    console.error("Backend error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// serve static frontend
-import path from "path";
-import { fileURLToPath } from "url";
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-app.use(express.static(path.join(__dirname, "public")));
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
-
+  </script>
+</body>
+</html>
