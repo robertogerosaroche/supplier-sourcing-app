@@ -1,1 +1,106 @@
+import express from "express";
+import fetch from "node-fetch"; // will be installed via npm
+
+const app = express();
+app.use(express.json());
+
+const SERP_API_KEY = process.env.SERPAPI_KEY; // set via env var on Render
+
+function buildQuery(requirements, country, certifications) {
+  let base = (requirements || "").trim();
+  if (!base) base = "industrial supplier";
+
+  if (certifications) {
+    base += " " + certifications;
+  }
+
+  const extraKeywords = ["supplier", "manufacturer", "vendor", "B2B"];
+  let query = `${base} (${extraKeywords.join(" OR ")})`;
+  if (country) query += ` in ${country}`;
+
+  return query;
+}
+
+function mapResultToSupplier(item, country, requirements) {
+  const url = item.link || item.url || "";
+  let displayLink = "unknown";
+  try {
+    if (url) displayLink = new URL(url).hostname;
+  } catch (_) {}
+
+  const title = item.title || displayLink;
+  const snippet = item.snippet || item.description || "";
+
+  const lowerSnippet = snippet.toLowerCase();
+  const lowerReq = (requirements || "").toLowerCase();
+
+  const tags = [];
+  if (lowerSnippet.includes("iso")) tags.push("ISO / quality");
+  if (lowerSnippet.includes("medical") || lowerSnippet.includes("pharma")) tags.push("Life sciences");
+  if (lowerSnippet.includes("plastic")) tags.push("Plastics");
+  if (lowerSnippet.includes("contract manufacturing")) tags.push("Contract manufacturing");
+  if (lowerReq.includes("prototype") || lowerReq.includes("prototyping")) tags.push("Prototyping");
+  tags.push("Web result");
+
+  return {
+    name: title,
+    url,
+    displayLink,
+    countryHint: country || "Not specified",
+    description: snippet,
+    tags,
+  };
+}
+
+app.post("/api/search-suppliers", async (req, res) => {
+  try {
+    const { requirements, country, certifications, maxResults } = req.body || {};
+    const query = buildQuery(requirements, country, certifications);
+    const num = maxResults && maxResults > 0 ? Math.min(maxResults, 20) : 10;
+
+    if (!SERP_API_KEY) {
+      return res.status(500).json({ error: "SerpAPI key not configured on server." });
+    }
+
+    const params = new URLSearchParams({
+      engine: "google",
+      q: query,
+      api_key: SERP_API_KEY,
+      num: String(num),
+    });
+
+    const url = `https://serpapi.com/search.json?${params.toString()}`;
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      console.error("SerpAPI HTTP error:", response.status);
+      return res.status(502).json({ error: `SerpAPI HTTP error ${response.status}` });
+    }
+
+    const data = await response.json();
+    const results = data.organic_results || [];
+    const suppliers = results
+      .filter((r) => r.link)
+      .slice(0, num)
+      .map((item) => mapResultToSupplier(item, country, requirements));
+
+    res.json(suppliers);
+  } catch (err) {
+    console.error("Backend error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// serve static frontend
+import path from "path";
+import { fileURLToPath } from "url";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+app.use(express.static(path.join(__dirname, "public")));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
 
